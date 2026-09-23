@@ -689,9 +689,27 @@ void Esp32Music::PlayAudioStream() {
     // 等待缓冲区有足够数据开始播放
     {
         std::unique_lock<std::mutex> lock(buffer_mutex_);
-        buffer_cv_.wait(lock, [this] { 
-            return buffer_size_ >= MIN_BUFFER_SIZE || (!is_downloading_ && !audio_buffer_.empty()); 
+        // >>> xiaozhi-kugou:fix-playback >>>
+        // 原版是无超时的 buffer_cv_.wait(谓词)：而下载线程的所有失败分支只置
+        // is_downloading_=false 就 return，从不清 is_playing_、也不 notify，
+        // 于是谓词恒为假 → 播放线程永久卡死，音频通道被占住，
+        // 连 StopStreaming()（「停止播放」）都叫不醒，只能断电重启。
+        // 这里加 12 秒超时兜底：拿不到任何数据就主动收摊，把设备还给对话功能。
+        buffer_cv_.wait_for(lock, std::chrono::seconds(12), [this] {
+            return !is_playing_ || buffer_size_ >= MIN_BUFFER_SIZE ||
+                   (!is_downloading_ && !audio_buffer_.empty());
         });
+        if (!is_playing_) {
+            return;
+        }
+        if (audio_buffer_.empty() && buffer_size_ == 0) {
+            ESP_LOGE(TAG, "PlayUrl: no audio data within 12s, abort playback");
+            is_playing_ = false;
+            is_downloading_ = false;
+            buffer_cv_.notify_all();
+            return;
+        }
+        // <<< xiaozhi-kugou:fix-playback <<<
     }
     
     ESP_LOGI(TAG, "小智开源音乐固件qq交流群:826072986");
@@ -718,19 +736,17 @@ void Esp32Music::PlayAudioStream() {
         auto& app = Application::GetInstance();
         DeviceState current_state = app.GetDeviceState();
         
-        // 等小智把话说完了，变成聆听状态之后，马上转成待机状态，进入音乐播放
-        if (current_state == kDeviceStateListening) {
-            ESP_LOGI(TAG, "Device is in listening state, switching to idle state for music playback");
-            // 切换状态
-            app.ToggleChatState(); // 变成待机状态
-            vTaskDelay(pdMS_TO_TICKS(300));
-            continue;
-        } else if (current_state != kDeviceStateIdle) { // 不是待机状态，就一直卡在这里，不让播放音乐
+        // >>> xiaozhi-kugou:fix-playback >>>
+        // 原版这里有一段「设备一进入聆听状态就调用 app.ToggleChatState() 强行切回待机」，
+        // 会把用户刚发起的对话直接掐断 —— 现象就是「跟它说话它不回应、一点声音都没有」。
+        // 现在改成：只在小智空闲时播放，其它状态（聆听 / 说话 / 连接中）一律让路，
+        // 但**绝不主动改设备状态**。这样用户随时可以打断音乐去对话。
+        if (current_state != kDeviceStateIdle) {
             ESP_LOGD(TAG, "Device state is %d, pausing music playback", current_state);
-            // 如果不是空闲状态，暂停播放
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
+        // <<< xiaozhi-kugou:fix-playback <<<
         
         // 设备状态检查通过，显示当前播放的歌名
         if (!song_name_displayed_ && !current_song_name_.empty()) {
