@@ -1,0 +1,61 @@
+# 云端编译 Otto 固件（含 self.music.play_url）
+#
+# 用法：
+#   1. fork `qrjjj/xiaozhi-esp32-music` 到自己的账号
+#   2. 用它本地的 firmware/apply_patch.py 打好补丁并 push
+#   3. 把这个文件放到仓库的 .github/workflows/build-otto.yml
+#   4. 仓库页面 → Actions → Build Otto firmware → Run workflow
+#   5. 跑完在 artifact `otto-robot-firmware` 里取 merged-binary.bin
+#
+# 说明：这个音乐固件 fork 原本没有 CI；官方 78/xiaozhi-esp32 的 build.yml 依赖
+#       新版的 scripts/build.py，套不到 1.7.x 上，所以这里直接调用它的 scripts/release.py
+#       （该脚本内部会 set-target → build → merge-bin → 打包 zip）。
+
+name: Build Otto firmware
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.4
+
+    steps:
+      - name: Checkout（必须带子模块）
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 编译 otto-robot 并合并整包
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/release.py otto-robot
+          echo "----- 产物 -----"
+          ls -lh build/merged-binary.bin
+          ls -lh releases/ || true
+
+      - name: 检查补丁是否真的生效
+        shell: bash
+        run: |
+          grep -q "self.music.play_url" main/mcp_server.cc \
+            && echo "OK: self.music.play_url 已在固件源码中" \
+            || { echo "ERROR: 没找到 self.music.play_url，补丁没应用上"; exit 1; }
+
+      - name: 上传固件
+        uses: actions/upload-artifact@v4
+        with:
+          name: otto-robot-firmware
+          path: |
+            build/merged-binary.bin
+            releases/*.zip
+          if-no-files-found: error
