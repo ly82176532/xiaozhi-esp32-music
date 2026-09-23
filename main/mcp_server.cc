@@ -123,6 +123,46 @@ void McpServer::AddCommonTools() {
                 ESP_LOGD(TAG, "Music details result: %s", download_result.c_str());
                 return true;
             });
+
+        // >>> xiaozhi-kugou:play_url >>>
+        // 播放外部服务下发的音频直链（小智 x 酷狗 MCP 项目使用）
+        AddTool("self.music.play_url",
+            "播放给定的音频直链。当外部服务已经提供可直接播放的音频 URL 时使用本工具。\n"
+            "参数:\n"
+            "  `url`: 音频文件直链（http/https，mp3）。必填。\n"
+            "  `song_name`: 歌曲名，可选，仅用于屏幕显示。\n"
+            "  `singer`: 歌手名，可选，仅用于屏幕显示。\n"
+            "  `metadata_url`: 歌词文件(LRC)地址，可选。\n"
+            "返回:\n"
+            "  播放状态信息，不需要确认，立刻开始播放。",
+            PropertyList({
+                Property("url", kPropertyTypeString),
+                // 注意：可选参数必须带默认值。否则 variant 里存的是 bool，
+                // 下面 value<std::string>() 会抛 std::bad_variant_access，工具直接崩。
+                Property("song_name", kPropertyTypeString, std::string("")),
+                Property("singer", kPropertyTypeString, std::string("")),
+                Property("metadata_url", kPropertyTypeString, std::string(""))
+            }),
+            [music](const PropertyList& properties) -> ReturnValue {
+                auto url = properties["url"].value<std::string>();
+                auto song_name = properties["song_name"].value<std::string>();
+                auto singer = properties["singer"].value<std::string>();
+                auto lyric_url = properties["metadata_url"].value<std::string>();
+                if (!music->PlayUrl(url, song_name, singer, lyric_url)) {
+                    return "{\"success\": false, \"message\": \"播放失败：无法拉取或解码该音频直链\"}";
+                }
+                return "{\"success\": true, \"message\": \"正在播放\"}";
+            });
+
+        AddTool("self.music.stop",
+            "停止当前正在播放的音乐。用户要求停止播放/关闭音乐时使用。",
+            PropertyList(),
+            [music](const PropertyList& properties) -> ReturnValue {
+                (void)properties;
+                music->StopStreaming();
+                return "{\"success\": true, \"message\": \"已停止播放\"}";
+            });
+        // <<< xiaozhi-kugou:play_url <<<
     }
 
     // Restore the original tools list to the end of the tools list

@@ -395,6 +395,61 @@ std::string Esp32Music::GetDownloadResult() {
     return last_downloaded_data_;
 }
 
+// >>> xiaozhi-kugou:play_url >>>
+// 直接按 URL 播放（供外部 MCP 服务下发音频直链使用）。
+// 复用已有的流式拉流 + MP3 解码 + 歌词显示通道，只把"音频从哪来"换成外部传入的 URL。
+bool Esp32Music::PlayUrl(const std::string& url,
+                         const std::string& song_name,
+                         const std::string& singer,
+                         const std::string& lyric_url) {
+    if (url.empty() || url.find("http") != 0) {
+        ESP_LOGE(TAG, "PlayUrl: invalid url: %s", url.c_str());
+        return false;
+    }
+
+    // 歌名 + 歌手 拼成一行给屏幕显示
+    std::string display_name = song_name;
+    if (!singer.empty()) {
+        if (display_name.empty()) {
+            display_name = singer;
+        } else {
+            display_name += " - " + singer;
+        }
+    }
+
+    current_song_name_ = display_name;
+    song_name_displayed_ = false;  // 让播放线程重新渲染歌名
+    current_music_url_ = url;
+    current_lyric_url_ = lyric_url;
+
+    ESP_LOGI(TAG, "PlayUrl: %s | url=%s", display_name.c_str(), url.c_str());
+
+    if (!StartStreaming(url)) {
+        ESP_LOGE(TAG, "PlayUrl: StartStreaming failed");
+        return false;
+    }
+
+    // 有歌词地址就启动歌词下载/滚动显示线程
+    if (!lyric_url.empty()) {
+        if (is_lyric_running_) {
+            is_lyric_running_ = false;
+            if (lyric_thread_.joinable()) {
+                lyric_thread_.join();
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(lyrics_mutex_);
+            lyrics_.clear();
+        }
+        current_lyric_index_ = -1;
+        is_lyric_running_ = true;
+        lyric_thread_ = std::thread(&Esp32Music::LyricDisplayThread, this);
+    }
+
+    return true;
+}
+// <<< xiaozhi-kugou:play_url <<<
+
 // 开始流式播放
 bool Esp32Music::StartStreaming(const std::string& music_url) {
     if (music_url.empty()) {

@@ -91,6 +91,13 @@ public:
     virtual bool StopStreaming() override;  // 停止流式播放
     virtual size_t GetBufferSize() const override { return buffer_size_; }
     virtual bool IsDownloading() const override { return is_downloading_; }
+
+// >>> xiaozhi-kugou:play_url >>>
+    virtual bool PlayUrl(const std::string& url,
+                         const std::string& song_name,
+                         const std::string& singer,
+                         const std::string& lyric_url) override;
+// <<< xiaozhi-kugou:play_url <<<
 };
 
 #endif // ESP32_MUSIC_H
